@@ -1,5 +1,6 @@
 // admin-app.js - Panel de administración (VERSIÓN GENÉRICA)
-// CON BOTÓN DE NUEVA RESERVA MANUAL, CALENDARIO DE DISPONIBILIDAD Y DÍAS CERRADOS
+// CON BOTÓN DE NUEVA RESERVA MANUAL, CALENDARIO DE DISPONIBILIDAD
+// SIN DEPENDENCIA DE dias-cerrados.js - OBTIENE DÍAS CERRADOS DIRECTAMENTE DE SUPABASE
 
 console.log('🚀 ADMIN-APP.JS - Panel de administración con Nueva Reserva y Calendario Disponibilidad');
 
@@ -351,6 +352,36 @@ function AdminApp() {
     const [fechasConHorarios, setFechasConHorarios] = React.useState({});
 
     // ============================================
+    // FUNCIÓN PARA CARGAR DÍAS CERRADOS DIRECTAMENTE DE SUPABASE
+    // ============================================
+    const cargarDiasCerradosDirecto = async () => {
+        try {
+            const negocioId = getNegocioId();
+            if (!negocioId) return [];
+            
+            const response = await fetch(
+                `${window.SUPABASE_URL}/rest/v1/dias_cerrados?negocio_id=eq.${negocioId}&select=fecha`,
+                {
+                    headers: {
+                        'apikey': window.SUPABASE_ANON_KEY,
+                        'Authorization': `Bearer ${window.SUPABASE_ANON_KEY}`
+                    }
+                }
+            );
+            
+            if (!response.ok) return [];
+            
+            const data = await response.json();
+            const fechas = data.map(d => d.fecha);
+            setDiasCerradosFechas(fechas);
+            return fechas;
+        } catch (error) {
+            console.error('Error cargando días cerrados:', error);
+            return [];
+        }
+    };
+
+    // ============================================
     // CARGAR CONFIGURACIÓN Y LOGO
     // ============================================
     React.useEffect(() => {
@@ -414,14 +445,9 @@ function AdminApp() {
         cargarDatosModal();
     }, []);
 
+    // 🔥 CARGAR DÍAS CERRADOS AL INICIO
     React.useEffect(() => {
-        const cargarDiasCerrados = async () => {
-            if (window.getDiasCerradosFechas) {
-                const fechas = await window.getDiasCerradosFechas();
-                setDiasCerradosFechas(fechas);
-            }
-        };
-        cargarDiasCerrados();
+        cargarDiasCerradosDirecto();
     }, []);
 
     React.useEffect(() => {
@@ -440,15 +466,10 @@ function AdminApp() {
         cargarDiasLaborales();
     }, [nuevaReservaData.profesional_id]);
 
+    // 🔥 CARGAR DÍAS CERRADOS CUANDO SE ABRE EL MODAL
     React.useEffect(() => {
         if (showNuevaReservaModal) {
-            const cargarDiasCerrados = async () => {
-                if (window.getDiasCerradosFechas) {
-                    const fechas = await window.getDiasCerradosFechas();
-                    setDiasCerradosFechas(fechas);
-                }
-            };
-            cargarDiasCerrados();
+            cargarDiasCerradosDirecto();
         }
     }, [showNuevaReservaModal]);
 
@@ -601,7 +622,7 @@ function AdminApp() {
         }
     };
 
-   // 🔥 FUNCIÓN PARA CARGAR DISPONIBILIDAD DEL MES EN EL MODAL (CORREGIDA)
+    // 🔥 FUNCIÓN PARA CARGAR DISPONIBILIDAD DEL MES EN EL MODAL
     const cargarDisponibilidadDelMes = async (fecha, profesionalId = null) => {
         if (!profesionalId && profesionalesList.length > 0) {
             profesionalId = profesionalesList[0]?.id;
@@ -617,7 +638,6 @@ function AdminApp() {
             const horasTrabajo = horarios.horas || [];
             const diasTrabajo = horarios.dias || []; 
             
-            // 👈 NUEVO: Obtenemos las fechas libres del profesional desde la lista ya cargada
             const profesionalObj = profesionalesList.find(p => p.id === profesionalId);
             const fechasLibresPersonales = profesionalObj?.fechas_libres || [];
             
@@ -660,10 +680,9 @@ function AdminApp() {
             for (let d = 1; d <= diasEnMes; d++) {
                 const fechaStr = `${year}-${(month + 1).toString().padStart(2, '0')}-${d.toString().padStart(2, '0')}`;
                 
-                // 👈 NUEVO: Si la fecha está en la lista de vacaciones del profesional, tacharla automáticamente
                 if (fechasLibresPersonales.includes(fechaStr)) {
                     disponibilidad[fechaStr] = false;
-                    continue; // Saltar al siguiente día del ciclo
+                    continue;
                 }
                 
                 const fechaActual = new Date(year, month, d);
@@ -752,30 +771,25 @@ function AdminApp() {
         
         const fechaStr = formatDate(date);
         
-        // 1. Validar Días cerrados globales
         if (diasCerradosFechas.includes(fechaStr)) {
             return false;
         }
         
-        // 2. Validar Fechas pasadas
         const hoy = getCurrentLocalDate();
         if (fechaStr < hoy) {
             return false;
         }
         
-        // 3. NUEVO: Validar Días Libres Personales del profesional
         const profesional = profesionalesList.find(p => p.id === parseInt(nuevaReservaData.profesional_id));
         if (profesional && profesional.fechas_libres && profesional.fechas_libres.includes(fechaStr)) {
-            return false; // El profesional está de vacaciones/libre este día
+            return false;
         }
         
-        // 4. Validar días de la semana en los que trabaja
         const diaSemana = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'][date.getDay()];
         if (diasLaborales.length > 0 && !diasLaborales.includes(diaSemana)) {
             return false;
         }
         
-        // 5. Validar que queden horarios libres
         return fechasConHorarios[fechaStr] || false;
     };
 
@@ -787,7 +801,7 @@ function AdminApp() {
     };
 
     // ============================================
-    // FUNCIÓN CORREGIDA: CREAR RESERVA MANUAL CON OPCIÓN DE ANTICIPO
+    // CREAR RESERVA MANUAL
     // ============================================
     const handleCrearReservaManual = async () => {
         if (!nuevaReservaData.cliente_nombre || !nuevaReservaData.cliente_whatsapp || 
@@ -828,25 +842,20 @@ function AdminApp() {
             };
 
             console.log('📤 Creando reserva manual. Requiere anticipo:', requiereAnticipo);
-            console.log('📤 Estado:', bookingData.estado);
             
             const result = await createBooking(bookingData);
             
             if (result.success && result.data) {
                 alert(`✅ Reserva creada exitosamente como "${result.data.estado}"`);
                 
-                console.log('📱 Enviando mensaje al cliente...');
-                
                 try {
                     if (requiereAnticipo) {
                         if (window.enviarMensajePago) {
                             await window.enviarMensajePago(result.data, configNegocio);
-                            console.log('✅ Mensaje con datos de pago enviado al cliente');
                         }
                     } else {
                         if (window.enviarConfirmacionReserva) {
                             await window.enviarConfirmacionReserva(result.data, configNegocio);
-                            console.log('✅ Confirmación de turno enviada al cliente');
                         }
                     }
                 } catch (whatsappError) {
@@ -1183,10 +1192,6 @@ Cualquier cambio, podés cancelarlo desde la app con hasta 1 hora de anticipaci�
         const tabs = [];
         tabs.push({ id: 'reservas', icono: '📅', label: userRole === 'profesional' ? 'Mis Reservas' : 'Reservas' });
         
-        if (userRole === 'admin' || (userRole === 'profesional' && userNivel >= 3)) {
-            tabs.push({ id: 'diasCerrados', icono: '🚫', label: 'Días Cerrados' });
-        }
-        
         if (userRole === 'admin' || (userRole === 'profesional' && userNivel >= 2)) {
             tabs.push({ id: 'configuracion', icono: '⚙️', label: 'Configuración' });
             tabs.push({ id: 'clientes', icono: '👤', label: 'Clientes' });
@@ -1426,7 +1431,6 @@ Cualquier cambio, podés cancelarlo desde la app con hasta 1 hora de anticipaci�
                                 <button onClick={() => setShowDisponibilidadModal(false)} className="text-gray-500 hover:text-gray-700 text-2xl">×</button>
                             </div>
                             
-                            {/* Selector de profesional */}
                             {userRole === 'admin' && profesionalesList.length > 0 && (
                                 <div className="mb-4">
                                     <label className="block text-sm font-medium text-gray-700 mb-1">Profesional:</label>
@@ -1447,14 +1451,12 @@ Cualquier cambio, podés cancelarlo desde la app con hasta 1 hora de anticipaci�
                                 </div>
                             )}
                             
-                            {/* Navegación del mes */}
                             <div className="flex justify-between items-center mb-4">
                                 <button onClick={() => cambiarMesDisponibilidad(-1)} className="px-3 py-2 bg-gray-100 rounded-lg hover:bg-gray-200">◀</button>
                                 <span className="text-lg font-bold">{monthNames[disponibilidadFecha.getMonth()]} {disponibilidadFecha.getFullYear()}</span>
                                 <button onClick={() => cambiarMesDisponibilidad(1)} className="px-3 py-2 bg-gray-100 rounded-lg hover:bg-gray-200">▶</button>
                             </div>
                             
-                            {/* Calendario */}
                             {disponibilidadCargando ? (
                                 <div className="text-center py-12"><div className="animate-spin h-8 w-8 border-b-2 border-pink-500 mx-auto"></div><p className="mt-2">Cargando disponibilidad...</p></div>
                             ) : (
@@ -1521,10 +1523,6 @@ Cualquier cambio, podés cancelarlo desde la app con hasta 1 hora de anticipaci�
 
                 {tabActivo === 'profesionales' && (userRole === 'admin' || userNivel >= 3) && (
                     <ProfesionalesPanel />
-                )}
-
-                {tabActivo === 'diasCerrados' && (userRole === 'admin' || userNivel >= 3) && (
-                    <DiasCerradosPanel />
                 )}
 
                 {tabActivo === 'clientes' && (userRole === 'admin' || userNivel >= 2) && (
